@@ -108,6 +108,7 @@ wb.defined_names.add(DefinedName("상태목록", attr_text=f"설정!$B$6:$B${5 +
 wb.defined_names.add(DefinedName("우선순위목록", attr_text=f"설정!$C$6:$C${5 + len(PRIORITIES)}"))
 wb.defined_names.add(DefinedName("분류목록", attr_text=f"설정!$D$6:$D${5 + len(CATEGORIES)}"))
 wb.defined_names.add(DefinedName("팀원목록", attr_text=f"설정!$E$6:$E${5 + len(MEMBERS)}"))
+wb.defined_names.add(DefinedName("프로젝트ID목록", attr_text="프로젝트!$B$6:$B$105"))
 
 # =====================================================================
 # 2. 프로젝트 시트
@@ -307,6 +308,136 @@ ws_t.conditional_formatting.add(
 
 ws_t.freeze_panes = f"E{FIRST}"
 ws_t.auto_filter.ref = f"B{HR}:L{FIRST + MAX_ROWS - 1}"
+
+# =====================================================================
+# 3.5 프로젝트 상세 시트 (드롭다운으로 프로젝트 선택 → 작업 자동 필터)
+# =====================================================================
+ws_v = wb.create_sheet("프로젝트 상세")
+ws_v.sheet_view.showGridLines = False
+
+ws_v["B2"] = "🔍 프로젝트 상세"
+ws_v["B2"].font = Font(name=FONT, bold=True, size=14, color=C_TITLE)
+ws_v["B3"] = "C5 셀에서 프로젝트를 선택하면 해당 프로젝트의 정보와 작업 목록이 자동으로 표시됩니다. 이 시트에는 데이터를 직접 입력하지 마세요."
+ws_v["B3"].font = Font(name=FONT, size=9, color="808080")
+
+DETAIL_WIDTHS = {"B": 12, "C": 30, "D": 10, "E": 10, "F": 10,
+                 "G": 12, "H": 12, "I": 10, "J": 10, "K": 26}
+for col, w in DETAIL_WIDTHS.items():
+    ws_v.column_dimensions[col].width = w
+ws_v.column_dimensions["A"].width = 2
+ws_v.column_dimensions["N"].hidden = True  # 헬퍼 열 숨김
+
+# 프로젝트 선택 드롭다운
+ws_v["B5"] = "프로젝트 선택"
+header_style(ws_v["B5"])
+ws_v["C5"] = "PRJ-001"
+ws_v["C5"].font = Font(name=FONT, bold=True, size=12, color=C_ACCENT)
+ws_v["C5"].fill = PatternFill("solid", fgColor=C_LIGHT)
+ws_v["C5"].alignment = Alignment(horizontal="center", vertical="center")
+ws_v["C5"].border = BORDER
+ws_v.row_dimensions[5].height = 24
+dv_proj = DataValidation(type="list", formula1="=프로젝트ID목록", allow_blank=True)
+ws_v.add_data_validation(dv_proj)
+dv_proj.add("C5")
+
+# 프로젝트 요약 카드
+SEL = "$C$5"
+M_ROW = f"MATCH({SEL},프로젝트!$B$6:$B$105,0)"
+info_headers = [("B", "프로젝트명"), ("D", "담당자"), ("E", "상태"), ("F", "시작일"),
+                ("G", "마감일"), ("H", "진행률"), ("I", "작업 수"), ("J", "완료 작업")]
+INFO_HR, INFO_VR = 7, 8
+ws_v.merge_cells(f"B{INFO_HR}:C{INFO_HR}")
+ws_v.merge_cells(f"B{INFO_VR}:C{INFO_VR}")
+for col, title in info_headers:
+    cell = ws_v[f"{col}{INFO_HR}"]
+    cell.value = title
+    header_style(cell)
+ws_v[f"C{INFO_HR}"].border = BORDER
+
+def proj_lookup(col_letter):
+    return f'=IF({SEL}="","",IFERROR(INDEX(프로젝트!${col_letter}$6:${col_letter}$105,{M_ROW}),""))'
+
+info_values = [
+    ("B", proj_lookup("C"), None),
+    ("D", proj_lookup("D"), None),
+    ("E", proj_lookup("G"), None),
+    ("F", proj_lookup("H"), "yyyy-mm-dd"),
+    ("G", proj_lookup("I"), "yyyy-mm-dd"),
+    ("H", proj_lookup("J"), "0%"),
+    ("I", f'=IF({SEL}="","",COUNTIFS(작업!$C$6:$C$105,{SEL},작업!$B$6:$B$105,"<>"))', None),
+    ("J", f'=IF({SEL}="","",COUNTIFS(작업!$C$6:$C$105,{SEL},작업!$G$6:$G$105,"완료"))', None),
+]
+for col, formula, fmt in info_values:
+    cell = ws_v[f"{col}{INFO_VR}"]
+    cell.value = formula
+    body_style(cell)
+    cell.font = Font(name=FONT, size=10, bold=True)
+    if fmt:
+        cell.number_format = fmt
+ws_v[f"C{INFO_VR}"].border = BORDER
+ws_v.row_dimensions[INFO_VR].height = 22
+for name, bg, fg in status_colors:
+    ws_v.conditional_formatting.add(
+        f"E{INFO_VR}",
+        CellIsRule(operator="equal", formula=[f'"{name}"'],
+                   fill=PatternFill("solid", fgColor=bg),
+                   font=Font(name=FONT, color=fg, bold=True)))
+
+# 작업 목록 (자동 필터링)
+DETAIL_HEADERS = ["작업 ID", "작업명", "담당자", "우선순위", "상태",
+                  "시작일", "마감일", "진행률", "남은 일수", "비고"]
+D_HR = 10          # 작업 테이블 헤더 행
+D_FIRST = D_HR + 1
+D_ROWS = 60
+for i, h in enumerate(DETAIL_HEADERS):
+    col = get_column_letter(2 + i)
+    cell = ws_v[f"{col}{D_HR}"]
+    cell.value = h
+    header_style(cell)
+ws_v.row_dimensions[D_HR].height = 24
+
+# 헬퍼 열(N): 선택된 프로젝트의 n번째 작업이 있는 상대 행 번호
+# 작업 시트 열 매핑: B=작업ID, D=작업명, E=담당자, F=우선순위, G=상태,
+#                    H=시작일, I=마감일, J=진행률, K=남은일수, L=비고
+SRC_COLS = ["B", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
+for i in range(D_ROWS):
+    r = D_FIRST + i
+    ws_v[f"N{r}"] = (
+        f'=IF({SEL}="","",IFERROR(AGGREGATE(15,6,'
+        f'(ROW(작업!$C$6:$C$105)-5)/((작업!$C$6:$C$105={SEL})*(작업!$B$6:$B$105<>"")),'
+        f'ROWS($N${D_FIRST}:$N{r})),""))')
+    for c_off, src in enumerate(SRC_COLS):
+        col = get_column_letter(2 + c_off)
+        cell = ws_v[f"{col}{r}"]
+        cell.value = f'=IF($N{r}="","",INDEX(작업!{src}$6:{src}$105,$N{r}))'
+        body_style(cell, horizontal="left" if col in ("C", "K") else "center")
+    ws_v[f"G{r}"].number_format = "yyyy-mm-dd"
+    ws_v[f"H{r}"].number_format = "yyyy-mm-dd"
+    ws_v[f"I{r}"].number_format = "0%"
+
+d_status_rng = f"F{D_FIRST}:F{D_FIRST + D_ROWS - 1}"
+for name, bg, fg in status_colors:
+    ws_v.conditional_formatting.add(
+        d_status_rng,
+        CellIsRule(operator="equal", formula=[f'"{name}"'],
+                   fill=PatternFill("solid", fgColor=bg),
+                   font=Font(name=FONT, color=fg, bold=True)))
+ws_v.conditional_formatting.add(
+    f"I{D_FIRST}:I{D_FIRST + D_ROWS - 1}",
+    DataBarRule(start_type="num", start_value=0, end_type="num", end_value=1,
+                color=C_ACCENT, showValue=True))
+ws_v.conditional_formatting.add(
+    f"J{D_FIRST}:J{D_FIRST + D_ROWS - 1}",
+    FormulaRule(formula=[f'AND($B{D_FIRST}<>"",$F{D_FIRST}<>"완료",ISNUMBER($J{D_FIRST}),$J{D_FIRST}<0)'],
+                fill=PatternFill("solid", fgColor=C_DELAY),
+                font=Font(name=FONT, color=C_DELAY_FG, bold=True)))
+ws_v.conditional_formatting.add(
+    f"J{D_FIRST}:J{D_FIRST + D_ROWS - 1}",
+    FormulaRule(formula=[f'AND($B{D_FIRST}<>"",$F{D_FIRST}<>"완료",ISNUMBER($J{D_FIRST}),$J{D_FIRST}>=0,$J{D_FIRST}<=7)'],
+                fill=PatternFill("solid", fgColor="FFE4C4"),
+                font=Font(name=FONT, color="C55A11", bold=True)))
+
+ws_v.freeze_panes = f"B{D_FIRST}"
 
 # =====================================================================
 # 4. 간트차트 시트 (주 단위, 조건부 서식 기반)
@@ -531,9 +662,10 @@ guide = [
     "📌 사용 방법",
     "1. [프로젝트] 시트에 프로젝트를 등록합니다. 상태·우선순위·분류·담당자는 드롭다운으로 선택하세요.",
     "2. [작업] 시트에 프로젝트별 세부 작업을 등록하고 프로젝트 ID로 연결합니다.",
-    "3. [간트차트] 시트에서 전체 일정을 한눈에 확인합니다. (파랑=진행, 초록=완료, 빨강=지연, 노랑 열=이번 주)",
-    "4. 이 대시보드는 자동으로 집계됩니다. 진행률은 프로젝트 시트에서 직접 입력하세요.",
-    "5. [설정] 시트에서 팀원·분류 등 드롭다운 목록을 수정할 수 있습니다.",
+    "3. [프로젝트 상세] 시트에서 프로젝트를 선택하면 해당 프로젝트의 정보와 작업만 모아서 볼 수 있습니다.",
+    "4. [간트차트] 시트에서 전체 일정을 한눈에 확인합니다. (파랑=진행, 초록=완료, 빨강=지연, 노랑 열=이번 주)",
+    "5. 이 대시보드는 자동으로 집계됩니다. 진행률은 프로젝트 시트에서 직접 입력하세요.",
+    "6. [설정] 시트에서 팀원·분류 등 드롭다운 목록을 수정할 수 있습니다.",
 ]
 for i, line in enumerate(guide):
     r = 22 + i
@@ -541,6 +673,9 @@ for i, line in enumerate(guide):
     ws_d[f"B{r}"].font = Font(name=FONT, size=10,
                               bold=(i == 0),
                               color=C_TITLE if i == 0 else "404040")
+
+# 시트 순서 정리: 설정 시트를 맨 뒤로
+wb.move_sheet("설정", offset=len(wb.sheetnames) - 1 - wb.sheetnames.index("설정"))
 
 wb.save("프로젝트_트랙커.xlsx")
 print("완료: 프로젝트_트랙커.xlsx")
