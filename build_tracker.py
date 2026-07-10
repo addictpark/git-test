@@ -281,6 +281,10 @@ for r in range(FIRST, FIRST + MAX_ROWS):
     ws_t[f"I{r}"].number_format = "yyyy-mm-dd"
     ws_t[f"J{r}"].number_format = "0%"
     ws_t[f"K{r}"] = f'=IF($B{r}="","",IF($G{r}="완료","-",I{r}-TODAY()))'
+    # 헬퍼 키: "프로젝트ID|해당 프로젝트에서의 몇 번째 작업인지"
+    # (프로젝트 상세 시트가 MATCH로 이 키를 찾아 작업을 나열한다)
+    ws_t[f"N{r}"] = f'=IF($B{r}="","",$C{r}&"|"&COUNTIF($C$6:$C{r},$C{r}))'
+ws_t.column_dimensions["N"].hidden = True
 
 dv_status2 = DataValidation(type="list", formula1="=상태목록", allow_blank=True)
 dv_pri2 = DataValidation(type="list", formula1="=우선순위목록", allow_blank=True)
@@ -396,16 +400,17 @@ for i, h in enumerate(DETAIL_HEADERS):
     header_style(cell)
 ws_v.row_dimensions[D_HR].height = 24
 
-# 헬퍼 열(N): 선택된 프로젝트의 n번째 작업이 있는 상대 행 번호
+# 헬퍼 열(N): 선택된 프로젝트의 n번째 작업이 있는 상대 행 번호.
+# 작업 시트의 헬퍼 키(N열, "프로젝트ID|n")를 MATCH로 찾는다 —
+# 배열 수식이 아니므로 Excel의 암시적 교차(@) 변환에 영향받지 않는다.
 # 작업 시트 열 매핑: B=작업ID, D=작업명, E=담당자, F=우선순위, G=상태,
 #                    H=시작일, I=마감일, J=진행률, K=남은일수, L=비고
 SRC_COLS = ["B", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
 for i in range(D_ROWS):
     r = D_FIRST + i
     ws_v[f"N{r}"] = (
-        f'=IF({SEL}="","",IFERROR(AGGREGATE(15,6,'
-        f'(ROW(작업!$C$6:$C$105)-5)/((작업!$C$6:$C$105={SEL})*(작업!$B$6:$B$105<>"")),'
-        f'ROWS($N${D_FIRST}:$N{r})),""))')
+        f'=IF({SEL}="","",IFERROR(MATCH({SEL}&"|"&ROWS($N${D_FIRST}:$N{r}),'
+        f'작업!$N$6:$N$105,0),""))')
     for c_off, src in enumerate(SRC_COLS):
         col = get_column_letter(2 + c_off)
         cell = ws_v[f"{col}{r}"]
